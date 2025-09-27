@@ -1,0 +1,307 @@
+# Estrutura do repositório
+
+Este arquivo contém todo o código do projeto dividido por arquivos. Copie cada arquivo para o seu repositório GitHub mantendo a estrutura de pastas.
+
+--- package.json ---
+{
+  "name": "amino-style-chat",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "client": "vite --config client/vite.config.js",
+    "build-client": "cd client && vite build",
+    "start": "node server/index.js",
+    "dev": "concurrently \"cd server && nodemon index.js\" \"cd client && vite\""
+  },
+  "dependencies": {
+    "concurrently": "^8.2.0"
+  }
+}
+
+--- server/package.json ---
+{
+  "name": "amino-server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  }
+}
+
+--- server/index.js ---
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: { origin: '*' }
+});
+
+// Dados em memória (para demo). Troque por DB em produção.
+const rooms = {
+  general: { id: 'general', title: 'Geral', messages: [] },
+  memes: { id: 'memes', title: 'Memes', messages: [] }
+};
+
+app.get('/rooms', (req, res) => {
+  res.json(Object.values(rooms));
+});
+
+app.get('/rooms/:id', (req, res) => {
+  const room = rooms[req.params.id];
+  if (!room) return res.status(404).json({ error: 'Sala não encontrada' });
+  res.json(room);
+});
+
+io.on('connection', (socket) => {
+  console.log('Novo cliente conectado', socket.id);
+
+  socket.on('joinRoom', (roomId, user) => {
+    socket.join(roomId);
+    socket.to(roomId).emit('systemMessage', `${user} entrou na sala`);
+  });
+
+  socket.on('leaveRoom', (roomId, user) => {
+    socket.leave(roomId);
+    socket.to(roomId).emit('systemMessage', `${user} saiu da sala`);
+  });
+
+  socket.on('sendMessage', (roomId, message) => {
+    // salvar em memória
+    const msg = { id: Date.now() + Math.random(), ...message };
+    if (rooms[roomId]) rooms[roomId].messages.push(msg);
+    io.to(roomId).emit('receiveMessage', msg);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Cliente desconectado', socket.id);
+  });
+});
+
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+
+--- client/package.json ---
+{
+  "name": "amino-client",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.2",
+    "react-router-dom": "^6.14.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.0",
+    "vite": "^5.2.0"
+  }
+}
+
+--- client/vite.config.js ---
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: { port: 3000 }
+})
+
+--- client/index.html ---
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Amino-style Chat</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+--- client/src/main.jsx ---
+import React from 'react'
+import { createRoot } from 'react-dom/client'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import App from './App'
+import './styles.css'
+
+createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<App/>} />
+      </Routes>
+    </BrowserRouter>
+  </React.StrictMode>
+)
+
+--- client/src/App.jsx ---
+import React, { useEffect, useState } from 'react'
+import io from 'socket.io-client'
+import ChatList from './components/ChatList'
+import ChatWindow from './components/ChatWindow'
+
+const SERVER = import.meta.env.VITE_SERVER_URL || 'http://localhost:4000'
+const socket = io(SERVER)
+
+export default function App(){
+  const [rooms, setRooms] = useState([])
+  const [currentRoom, setCurrentRoom] = useState(null)
+  const [user, setUser] = useState(() => localStorage.getItem('user') || '')
+
+  useEffect(()=>{
+    fetch(`${SERVER}/rooms`).then(r=>r.json()).then(data=>setRooms(data))
+  },[])
+
+  useEffect(()=>{
+    return ()=> socket.disconnect()
+  },[])
+
+  const enterRoom = (room) => {
+    if(!user) return alert('Escolha um nick antes de entrar.')
+    setCurrentRoom(room)
+    socket.emit('joinRoom', room.id, user)
+  }
+
+  return (
+    <div className="app">
+      <aside className="sidebar">
+        <div className="profile">
+          <input placeholder="Seu nick" value={user} onChange={e=>{setUser(e.target.value); localStorage.setItem('user', e.target.value)}} />
+        </div>
+        <ChatList rooms={rooms} onEnter={enterRoom} />
+      </aside>
+      <main className="main">
+        {currentRoom ? (
+          <ChatWindow room={currentRoom} socket={socket} user={user} />
+        ) : (
+          <div className="empty">Escolha uma sala para começar a conversar</div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+--- client/src/components/ChatList.jsx ---
+import React from 'react'
+
+export default function ChatList({ rooms, onEnter }){
+  return (
+    <div className="chat-list">
+      {rooms.map(room => (
+        <div key={room.id} className="chat-item" onClick={()=>onEnter(room)}>
+          <div className="chat-thumb">{room.title[0]}</div>
+          <div className="chat-info">
+            <div className="chat-title">{room.title}</div>
+            <div className="chat-last">{room.messages && room.messages.length ? room.messages[room.messages.length-1].text : 'Sem mensagens'}</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+--- client/src/components/ChatWindow.jsx ---
+import React, { useEffect, useState, useRef } from 'react'
+
+export default function ChatWindow({ room, socket, user }){
+  const [messages, setMessages] = useState([])
+  const [text, setText] = useState('')
+  const endRef = useRef()
+
+  useEffect(()=>{
+    // pegar histórico por REST
+    fetch(`http://localhost:4000/rooms/${room.id}`).then(r=>r.json()).then(data=>setMessages(data.messages || []))
+
+    const onReceive = (msg) => setMessages(prev=>[...prev, msg])
+    const onSystem = (msg) => setMessages(prev=>[...prev, { id: Date.now()+Math.random(), user: 'Sistema', system: true, text: msg }])
+
+    socket.on('receiveMessage', onReceive)
+    socket.on('systemMessage', onSystem)
+
+    return ()=>{
+      socket.off('receiveMessage', onReceive)
+      socket.off('systemMessage', onSystem)
+    }
+  }, [room])
+
+  useEffect(()=> endRef.current?.scrollIntoView({ behavior: 'smooth' }), [messages])
+
+  const send = () => {
+    if(!text.trim()) return
+    const msg = { user, text: text.trim(), at: new Date().toISOString() }
+    socket.emit('sendMessage', room.id, msg)
+    setText('')
+  }
+
+  return (
+    <div className="chat-window">
+      <header className="chat-header">{room.title}</header>
+      <div className="messages">
+        {messages.map(m => (
+          <div key={m.id} className={`message ${m.user===user ? 'me' : ''} ${m.system ? 'system' : ''}`}>
+            {!m.system && <div className="author">{m.user}</div>}
+            <div className="bubble">{m.text}</div>
+            <div className="time">{new Date(m.at || Date.now()).toLocaleTimeString()}</div>
+          </div>
+        ))}
+        <div ref={endRef} />
+      </div>
+      <footer className="chat-input">
+        <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=> e.key==='Enter' && send()} placeholder="Digite uma mensagem..." />
+        <button onClick={send}>Enviar</button>
+      </footer>
+    </div>
+  )
+}
+
+--- client/src/styles.css ---
+:root{--bg:#0f172a;--panel:#0b1220;--accent:#6ee7b7;--muted:#9aa4b2}
+*{box-sizing:border-box;font-family:Inter, Roboto, Arial}
+html,body,#root{height:100%}
+body{margin:0;background:linear-gradient(180deg,#071025 0%, #07112a 100%);color:white}
+.app{display:flex;height:100vh}
+.sidebar{width:320px;background:var(--panel);padding:12px;display:flex;flex-direction:column}
+.profile input{width:100%;padding:8px;border-radius:6px;border:1px solid #0f172a;margin-bottom:12px}
+.chat-list{overflow-y:auto}
+.chat-item{display:flex;gap:10px;padding:8px;border-radius:8px;cursor:pointer;margin-bottom:6px;background:rgba(255,255,255,0.02)}
+.chat-thumb{width:48px;height:48px;border-radius:10px;background:rgba(255,255,255,0.04);display:flex;align-items:center;justify-content:center;font-weight:700}
+.chat-title{font-weight:700}
+.main{flex:1;padding:16px;display:flex;flex-direction:column}
+.empty{align-self:center;color:var(--muted);margin-top:50px}
+.chat-window{display:flex;flex-direction:column;height:100%;background:rgba(255,255,255,0.02);border-radius:10px;overflow:hidden}
+.chat-header{padding:12px;border-bottom:1px solid rgba(255,255,255,0.03);font-weight:700}
+.messages{flex:1;padding:12px;overflow-y:auto}
+.message{margin-bottom:10px}
+.message.me{align-items:flex-end}
+.author{font-size:12px;color:var(--muted)}
+.bubble{display:inline-block;padding:10px 12px;border-radius:10px;background:rgba(255,255,255,0.04);max-width:70%}
+.message.me .bubble{background:linear-gradient(90deg,var(--accent),#34d399);color:#062018}
+.time{font-size:11px;color:var(--muted);margin-top:4px}
+.chat-input{display:flex;padding:12px;border-top:1px solid rgba(255,255,255,0.03)}
+.chat-input input{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);margin-right:8px}
+.chat-input button{padding:10px 14px;border-radius:8px;border:none;background:var(--accent);font-weight:700}
